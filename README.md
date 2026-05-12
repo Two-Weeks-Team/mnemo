@@ -2,7 +2,7 @@
 
 The engine layer for **Mnemo** — an on-device system that records what you need (from your screen, mic, clipboard, files, or a deliberate "remember this") and expresses it back to you in whatever form you can receive: voice, non-speech sound, screen, haptics, large type, or plain-language simplification. Everything stays on the device. The model that does the remembering and the reasoning is Gemma 4, running on-device.
 
-> **Phase 1 (the engine core) + Phase 2 (the memory layer on disk) have landed.** It is not the product yet. It is the architecture, proven and tested: the model types, the `MemoryStore` actor (in-memory **and** a SQLite-backed on-disk store), a flat-cosine `VectorIndex` + a stub `EmbeddingService`, a `RecallEngine` skeleton + `ContextBudgeter` + the frozen `RecallFunctionContract`, a stub `GemmaService` + `AbstentionGate` + `FunctionCallOrchestrator`-pattern, the `SummaryEngine` rollup job (closed-bucket daily → weekly → monthly → yearly summaries), the `ExpressionRouter` (the adaptive heart — an explicit precedence lattice) + 6 value-emitting adapters, a `Clock` abstraction, and a thin `MnemoCoordinator`. Pure logic + on-device SQLite; no platform *capture* APIs yet. **Compiles with CommandLineTools alone; 51 swift-testing tests pass.**
+> **Phases 1–2 have landed; Phase 3's pure half is in.** It is not the product yet. It is the architecture, proven and tested: the model types, the `MemoryStore` actor (in-memory **and** a SQLite-backed on-disk store), a flat-cosine `VectorIndex` + a stub `EmbeddingService`, a `RecallEngine` skeleton + `ContextBudgeter` + the frozen `RecallFunctionContract` + a tolerant `FunctionCallParser`, a stub `GemmaService` + `AbstentionGate` + `FunctionCallOrchestrator`-pattern, the `SummaryEngine` rollup job (closed-bucket daily → weekly → monthly → yearly summaries), the `ExpressionRouter` (the adaptive heart — an explicit precedence lattice) + 6 value-emitting adapters, a `Clock` abstraction, and a thin `MnemoCoordinator`. Pure logic + on-device SQLite; the on-device *model runtime* (MLX) and the platform *capture* APIs are not wired here (they need Xcode + ~4 GB weights — a separate integration target / the app layer). **Compiles with CommandLineTools alone; 67 swift-testing tests pass.**
 >
 > See **`docs/mnemo-implementation-plan.md`** for the full plan, the 3-critic loop-validation (§10), and the honest deployable-state assessment.
 
@@ -57,11 +57,21 @@ Tests/MnemoEngineTests/
   SummaryEngineTests.swift     — closed-buckets-only; idempotent; never mutates events; monthly rollup after the month closes; SQLite summary store
 ```
 
+### Phase 3 — the recall model (pure half landed; the MLX runtime is a separate target)
+
+`GemmaService.real` = a text generator (Gemma 4 E4B-it 4-bit, on-device via MLX) **+** a tolerant function-call parser. The parser is pure logic and ships here; the text generator needs MLX (Apple-Silicon-only, Xcode-only to build, ~4 GB of weights) and lives in a separate integration target / the app layer, mirroring He Was Socrates's `#if canImport(MLXLLM)` split.
+
+```
+Sources/MnemoEngine/Recall/FunctionCallParser.swift   — model text → a typed RecallFunctionCall against RecallFunctionContract's 5 functions. Tolerant of ```fences```, <tool_call> tags, prose around the JSON, alternate key names (`function`/`parameters`/`q`/…), {start,end} vs [a,b] vs "yyyy-MM" ranges, ISO-8601 dates; a `}` inside a JSON string doesn't fool the brace matcher. Genuinely-unparseable output → `.unparseable(rawText:)` so the caller falls back.
+Sources/MnemoEngine/Reason/FunctionCallGenerating.swift  — the Phase-3 seam: `FunctionCallGenerating { func generate(prompt:maxTokens:) async throws -> String }` (whoever provides MLX implements it) + the verified model identity (HF `mlx-community/gemma-4-e4b-it-4bit`, `LLMRegistry.gemma4_e4b_it_4bit`, mlx-swift-lm ≥ 3.31.3) + `UnavailableFunctionCallGenerator` (the dependency-free engine ships no runtime — throws)
+Tests/MnemoEngineTests/FunctionCallParserTests.swift  — all 5 functions; fenced/tagged/prose-wrapped; alternate keys; inlined args; brace-in-string; range-as-object/array/month-string; missing-required-arg → unparseable; unknown function → unparseable; the generator throws
+```
+
 ## Build & test
 
 ```bash
 make build       # swift build — builds with CommandLineTools alone (no Xcode required)
-make test        # swift test — 51 swift-testing tests
+make test        # swift test — 67 swift-testing tests
 make lint        # swift-format lint -r Sources Tests
 make ci-local    # build + test + lint — the same gates CI runs
 ```
@@ -74,7 +84,7 @@ CI (`.github/workflows/ci.yml`, `macos-15`): build-and-test · swift-format lint
 |---|---|---|---|
 | 1 ✅ | the engine core | ~1.5 sessions | done |
 | 2 ◑ | `SQLiteMemoryStore` (tombstone deletes, **outside all backup/sync/Spotlight scopes** + a CI test for the path attributes), the `SummaryEngine` rollup job — **done**. Still pending: a real *on-disk* vector index (the flat index is rebuilt in memory on open today — fine to ~10⁶ events), at-rest *encryption* (today: FileVault + iOS `FileProtection`; the Mnemo-vault key is Phase 5) | days | landed; encryption + on-disk ANN are follow-ups |
-| 3 | `GemmaService.real` (Gemma 4 E4B-it 4-bit via mlx-swift-lm — confirm the HF repo id / registry key first), a real `EmbeddingService` (MiniLM-class), real function-calling round-trips | days | ~weeks |
+| 3 ◑ | The function-call **parser** + the `FunctionCallGenerating` seam + the verified model identity — **done** (pure, testable, ships here). Still pending: the MLX text generator (`mlx-community/gemma-4-e4b-it-4bit` via `LLMRegistry.gemma4_e4b_it_4bit`, mlx-swift-lm ≥ 3.31.3 — a separate Xcode-built integration target / app-layer wiring, ~4 GB weights), a real `EmbeddingService` (an all-MiniLM-class model in MLX/Core ML, ~25 MB), the end-to-end real function-calling round-trip | days (the MLX side) | the parser landed; the runtime is the next concrete step |
 | 4 | real capture (macOS): `ScreenCaptureKit` (+ the screen-recording entitlement, the TCC flow, a non-dismissible indicator while the mic is live), `AVAudioEngine`+VAD+STT (audio default = push-to-capture), clipboard (read-only), files, manual; `BlackoutPolicy` enforced | 1–2 weeks | ~1–2 months with the privacy UX done correctly |
 | 5 | the macOS app: the Mnemo mode/window, the query bar, the screen-presentation renderer, the haptic player (degraded on macOS), the timeline view, onboarding (the affirmative privacy framing + the accessibility-needs guided setup + the recording-legality note at audio-enable time + a separate Mnemo vault credential + a panic-wipe reachable without unlocking the app), the privacy-controls UI | 1–2 weeks | ~1–2 months |
 | 6 | iOS (where the haptic adapter is *strong*): iOS app + iOS capture (`ReplayKit`/`RPScreenRecorder`, Core Haptics), the iOS LLM runtime | 2–3 weeks | later |
@@ -84,6 +94,11 @@ CI (`.github/workflows/ci.yml`, `macos-15`): build-and-test · swift-format lint
 
 ## The immediate next concrete step
 
-**Phase 3 — wire the real model.** `GemmaService.real`: Gemma 4 E4B-it 4-bit via `mlx-swift-lm` (confirm the HF repo id and the `mlx-swift-lm` registry key at wiring time — cheap insurance, per plan §10 open question #3), implementing `recall` + `simplify` + `summarizeDay` + `summarizeRollup` against the same protocols the stubs satisfy, with native function calling parsed against `RecallFunctionContract`. Plus a real `EmbeddingService` (an `all-MiniLM`-class model in MLX/Core ML, ~25 MB — Gemma 4 has no first-class embedding API, so it's a separate model) replacing `StubEmbeddingService`. Both slot in behind their existing protocols; the rest of the engine doesn't move.
+**The MLX integration target.** The function-call parser and the `FunctionCallGenerating` seam are in; what's left of Phase 3 is the part that needs a toolchain this library deliberately doesn't depend on. Add a separate Swift package / target (e.g. `MnemoEngineMLX`) that depends on `mlx-swift-lm` ≥ 3.31.3, loads `LLMRegistry.gemma4_e4b_it_4bit` (HF `mlx-community/gemma-4-e4b-it-4bit`, downloaded once into the system MLX cache by a clearly-scoped installer flow — the always-on app carries no network entitlement), and provides:
+- a `FunctionCallGenerating` conformance (Gemma 4 → raw text → `FunctionCallParser`), and
+- a `GemmaReasoning` conformance for `recall` / `simplify` / `summarizeDay` / `summarizeRollup` (a thin layer over the generator + the existing context-budgeting), plus
+- a real `EmbeddingService` (an `all-MiniLM`-class model in MLX or Core ML, ~25 MB — Gemma 4 has no first-class embedding API).
+
+The engine's protocols don't move; the new target slots in behind them. Build it with Xcode (Swift 6.1+), wire it in CI with `setup-xcode` (mirroring He Was Socrates), and budget for the ~4 GB first-launch download + the E4B latency/thermal questions the plan §7 flags.
 
 Smaller follow-ups that round out Phase 2: an on-disk ANN vector index behind the `VectorIndex` protocol (the flat index is fine to ~10⁶ events but is rebuilt in memory on open today), and at-rest encryption integration (the engine sets `isExcludedFromBackup` + iOS `FileProtection`; the Mnemo-vault Keychain key is the app layer's, Phase 5).
