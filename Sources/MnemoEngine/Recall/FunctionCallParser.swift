@@ -95,7 +95,8 @@ public enum FunctionCallParser {
 
     /// The first balanced `{ … }` substring (brace-counting, string-aware so a
     /// `}` inside a JSON string doesn't close the object), decoded to `[String: Any]`.
-    private static func firstJSONObject(in s: String) -> [String: Any]? {
+    /// Internal so the function-call reasoning adapter can reuse it.
+    static func firstJSONObject(in s: String) -> [String: Any]? {
         let chars = Array(s)
         var i = 0
         while i < chars.count {
