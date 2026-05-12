@@ -25,6 +25,18 @@ public struct GemmaRecallOutput: Sendable, Equatable {
     }
 }
 
+/// What the model produces when it rolls up a span of memory (a day's events,
+/// or a set of child summaries). The SummaryEngine owns the child IDs and the
+/// `id`/`tier`/`span` envelope; the model just supplies the prose + entities.
+public struct GemmaSummaryOutput: Sendable, Equatable {
+    public var summary: String
+    public var keyEventIDs: [UUID]
+    public var entities: [EntityMention]
+    public init(summary: String, keyEventIDs: [UUID] = [], entities: [EntityMention] = []) {
+        self.summary = summary; self.keyEventIDs = keyEventIDs; self.entities = entities
+    }
+}
+
 public protocol GemmaReasoning: Sendable {
     /// Given the query and the assembled context (recent raw events + summary
     /// scaffold, already budgeted to fit 128K), produce a recall answer.
@@ -33,6 +45,16 @@ public protocol GemmaReasoning: Sendable {
     /// Re-render text at a target reading level (the SimplifiedAdapter asks for
     /// this; the *app* would call it — Phase 1 stub is near-passthrough).
     func simplify(_ text: String, toReadingLevel level: Int) async -> String
+
+    /// Summarize one CLOSED day-bucket's events. The SummaryEngine calls this on
+    /// idle/charging; it never mutates the events. `keyEventIDs` should be a
+    /// small set of the most informative event ids.
+    func summarizeDay(events: [CaptureEvent], dayBucket: DateInterval) async -> GemmaSummaryOutput
+
+    /// Roll up child summaries (dailies → weekly, weeklies → monthly, …) into a
+    /// higher-tier body. `childSummaries` are the child prose blocks in order;
+    /// `childEntities` are their merged entity mentions.
+    func summarizeRollup(tier: SummaryTier, span: DateInterval, childSummaries: [String], childEntities: [EntityMention]) async -> GemmaSummaryOutput
 }
 
 public struct StubGemmaService: GemmaReasoning {
@@ -75,5 +97,54 @@ public struct StubGemmaService: GemmaReasoning {
             return firstSentence.replacingOccurrences(of: #"\([^)]*\)"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces)
         }.joined(separator: "\n")
+    }
+
+    public func summarizeDay(events: [CaptureEvent], dayBucket: DateInterval) async -> GemmaSummaryOutput {
+        guard !events.isEmpty else {
+            return GemmaSummaryOutput(summary: "Nothing recorded.")
+        }
+        // Deterministic "summary": count by source + a few snippets, oldest-first.
+        let ordered = events.sorted { $0.timestamp < $1.timestamp }
+        var bySource: [CaptureSource: Int] = [:]
+        for e in ordered { bySource[e.source, default: 0] += 1 }
+        let counts = CaptureSource.allCases
+            .compactMap { s in bySource[s].map { "\($0) \(s.rawValue)" } }
+            .joined(separator: ", ")
+        let snippets = ordered.prefix(3).map { e in
+            e.text.count > 80 ? String(e.text.prefix(77)) + "…" : e.text
+        }
+        let summary = "\(events.count) events (\(counts)). " + snippets.joined(separator: " / ")
+        let keyIDs = Array(ordered.prefix(3).map(\.id))
+        let entities = mergedEntities(ordered.flatMap { $0.entities ?? [] })
+        return GemmaSummaryOutput(summary: summary, keyEventIDs: keyIDs, entities: entities)
+    }
+
+    public func summarizeRollup(tier: SummaryTier, span: DateInterval, childSummaries: [String], childEntities: [EntityMention]) async -> GemmaSummaryOutput {
+        guard !childSummaries.isEmpty else {
+            return GemmaSummaryOutput(summary: "No activity this \(tier).")
+        }
+        // Deterministic: first sentence of each child, capped.
+        let leads = childSummaries.prefix(5).map { s in
+            (s.split(separator: ".").first.map(String.init) ?? s).trimmingCharacters(in: .whitespaces)
+        }
+        let more = childSummaries.count > 5 ? " (+\(childSummaries.count - 5) more)" : ""
+        return GemmaSummaryOutput(
+            summary: "\(childSummaries.count) sub-periods: " + leads.joined(separator: "; ") + more,
+            entities: mergedEntities(childEntities)
+        )
+    }
+
+    /// Deduplicate entity mentions by (surfaceForm, kind), preferring a resolved name.
+    private func mergedEntities(_ mentions: [EntityMention]) -> [EntityMention] {
+        var seen: [String: EntityMention] = [:]
+        for m in mentions {
+            let key = "\(m.kind.rawValue)\u{1F}\(m.surfaceForm.lowercased())"
+            if let existing = seen[key] {
+                if existing.resolvedName == nil, m.resolvedName != nil { seen[key] = m }
+            } else {
+                seen[key] = m
+            }
+        }
+        return seen.values.sorted { $0.surfaceForm < $1.surfaceForm }
     }
 }

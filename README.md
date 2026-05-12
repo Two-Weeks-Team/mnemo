@@ -2,7 +2,7 @@
 
 The engine layer for **Mnemo** — an on-device system that records what you need (from your screen, mic, clipboard, files, or a deliberate "remember this") and expresses it back to you in whatever form you can receive: voice, non-speech sound, screen, haptics, large type, or plain-language simplification. Everything stays on the device. The model that does the remembering and the reasoning is Gemma 4, running on-device.
 
-> **This is Phase 1: the engine *core*.** It is not the product yet. It is the architecture, proven and tested: the model types, an in-memory `MemoryStore` actor + a flat-cosine `VectorIndex` + a stub `EmbeddingService`, a `RecallEngine` skeleton + `ContextBudgeter` + the frozen `RecallFunctionContract`, a stub `GemmaService` + `AbstentionGate` + `FunctionCallOrchestrator`-pattern, the `ExpressionRouter` (the adaptive heart — an explicit precedence lattice) + 6 value-emitting adapters, a `Clock` abstraction, and a thin `MnemoCoordinator`. Pure logic; no platform capture APIs yet. **Compiles; 35 swift-testing tests pass.**
+> **Phase 1 (the engine core) + Phase 2 (the memory layer on disk) have landed.** It is not the product yet. It is the architecture, proven and tested: the model types, the `MemoryStore` actor (in-memory **and** a SQLite-backed on-disk store), a flat-cosine `VectorIndex` + a stub `EmbeddingService`, a `RecallEngine` skeleton + `ContextBudgeter` + the frozen `RecallFunctionContract`, a stub `GemmaService` + `AbstentionGate` + `FunctionCallOrchestrator`-pattern, the `SummaryEngine` rollup job (closed-bucket daily → weekly → monthly → yearly summaries), the `ExpressionRouter` (the adaptive heart — an explicit precedence lattice) + 6 value-emitting adapters, a `Clock` abstraction, and a thin `MnemoCoordinator`. Pure logic + on-device SQLite; no platform *capture* APIs yet. **Compiles with CommandLineTools alone; 51 swift-testing tests pass.**
 >
 > See **`docs/mnemo-implementation-plan.md`** for the full plan, the 3-critic loop-validation (§10), and the honest deployable-state assessment.
 
@@ -41,11 +41,27 @@ Tests/MnemoEngineTests/
   MemoryAndRecallTests.swift   — dedup, deferred enrichment, recall happy path, recall defers advice, recall-empty, coordinator end to end
 ```
 
+### Phase 2 additions — the memory layer, on disk
+
+```
+Sources/MnemoEngine/Memory/
+  SQLiteSupport.swift          — a deliberately tiny wrapper over the system `SQLite3` C module (no SPM dependency — the dependency gate stays clean): open + WAL pragmas + prepared statements + transactions + VACUUM
+  StorageHardening.swift       — invariant #5: `isExcludedFromBackup`, the `.metadata_never_index` Spotlight marker, iOS `FileProtectionType` — hardens whatever path the app layer hands it (the *location* is the app's job, Phase 4/5)
+  SQLiteMemoryStore.swift      — the on-disk `MemoryStore` (one row per event: indexed scalars + the `Codable` event as a JSON blob; the flat-cosine vector index is held in memory, rebuilt from disk on open). Deletes are REAL: payload columns nulled + `deleted = 1`, leaving an `(id, timestamp)` tombstone; `compact()` runs `VACUUM`
+  SummaryStore.swift           — `SummaryStore` protocol + `InMemorySummaryStore` + `SQLiteSummaryStore` (its own hardened `summaries.sqlite3`)
+  SummaryEngine.swift          — the rollup job: walks CLOSED day/week/month/year buckets (ISO-8601, UTC), writes a summary for any bucket that lacks one, NEVER mutates a `CaptureEvent`. Idempotent.
+Sources/MnemoEngine/Reason/GemmaService.swift  — `GemmaReasoning` gains `summarizeDay` / `summarizeRollup` (the stub is deterministic; the real model is Phase 3)
+Tests/MnemoEngineTests/
+  SQLiteMemoryStoreTests.swift — append/dedup/enrich+retrieve/range/real-delete+reopen/persistence+index-rebuild/compact
+  StorageHardeningTests.swift  — directory excluded-from-backup + Spotlight marker; the store hardens its own paths; idempotent  (this is the path-attributes CI test the plan §7 calls for, landing early)
+  SummaryEngineTests.swift     — closed-buckets-only; idempotent; never mutates events; monthly rollup after the month closes; SQLite summary store
+```
+
 ## Build & test
 
 ```bash
 make build       # swift build — builds with CommandLineTools alone (no Xcode required)
-make test        # swift test — 35 swift-testing tests
+make test        # swift test — 51 swift-testing tests
 make lint        # swift-format lint -r Sources Tests
 make ci-local    # build + test + lint — the same gates CI runs
 ```
@@ -56,8 +72,8 @@ CI (`.github/workflows/ci.yml`, `macos-15`): build-and-test · swift-format lint
 
 | Phase | What | Effort (raw eng) | Realistic calendar |
 |---|---|---|---|
-| 1 ✅ | the engine core (this) | ~1.5 sessions | done |
-| 2 | `SQLiteMemoryStore` (encrypted, tombstone deletes, **outside all backup/sync/Spotlight scopes**), a real on-disk vector index, the `SummaryEngine` rollup job | days | ~weeks |
+| 1 ✅ | the engine core | ~1.5 sessions | done |
+| 2 ◑ | `SQLiteMemoryStore` (tombstone deletes, **outside all backup/sync/Spotlight scopes** + a CI test for the path attributes), the `SummaryEngine` rollup job — **done**. Still pending: a real *on-disk* vector index (the flat index is rebuilt in memory on open today — fine to ~10⁶ events), at-rest *encryption* (today: FileVault + iOS `FileProtection`; the Mnemo-vault key is Phase 5) | days | landed; encryption + on-disk ANN are follow-ups |
 | 3 | `GemmaService.real` (Gemma 4 E4B-it 4-bit via mlx-swift-lm — confirm the HF repo id / registry key first), a real `EmbeddingService` (MiniLM-class), real function-calling round-trips | days | ~weeks |
 | 4 | real capture (macOS): `ScreenCaptureKit` (+ the screen-recording entitlement, the TCC flow, a non-dismissible indicator while the mic is live), `AVAudioEngine`+VAD+STT (audio default = push-to-capture), clipboard (read-only), files, manual; `BlackoutPolicy` enforced | 1–2 weeks | ~1–2 months with the privacy UX done correctly |
 | 5 | the macOS app: the Mnemo mode/window, the query bar, the screen-presentation renderer, the haptic player (degraded on macOS), the timeline view, onboarding (the affirmative privacy framing + the accessibility-needs guided setup + the recording-legality note at audio-enable time + a separate Mnemo vault credential + a panic-wipe reachable without unlocking the app), the privacy-controls UI | 1–2 weeks | ~1–2 months |
@@ -68,4 +84,6 @@ CI (`.github/workflows/ci.yml`, `macos-15`): build-and-test · swift-format lint
 
 ## The immediate next concrete step
 
-**Phase 2 — `SQLiteMemoryStore`**: an encrypted, deduped, tombstone-delete SQLite store living *outside* all backup/sync/Spotlight scopes (`isExcludedFromBackup = true`, no iCloud/Handoff container, a `.metadata_never_index` marker), with a CI test asserting those path attributes. Plus the `SummaryEngine` rollup job (on closed day-buckets only, never mutating an event in place). The in-memory store's protocol already defines the shape; `SQLiteMemoryStore` slots in behind it.
+**Phase 3 — wire the real model.** `GemmaService.real`: Gemma 4 E4B-it 4-bit via `mlx-swift-lm` (confirm the HF repo id and the `mlx-swift-lm` registry key at wiring time — cheap insurance, per plan §10 open question #3), implementing `recall` + `simplify` + `summarizeDay` + `summarizeRollup` against the same protocols the stubs satisfy, with native function calling parsed against `RecallFunctionContract`. Plus a real `EmbeddingService` (an `all-MiniLM`-class model in MLX/Core ML, ~25 MB — Gemma 4 has no first-class embedding API, so it's a separate model) replacing `StubEmbeddingService`. Both slot in behind their existing protocols; the rest of the engine doesn't move.
+
+Smaller follow-ups that round out Phase 2: an on-disk ANN vector index behind the `VectorIndex` protocol (the flat index is fine to ~10⁶ events but is rebuilt in memory on open today), and at-rest encryption integration (the engine sets `isExcludedFromBackup` + iOS `FileProtection`; the Mnemo-vault Keychain key is the app layer's, Phase 5).
