@@ -23,17 +23,21 @@ test:
 
 ## lint: swift-format lint (errors fail; warnings tolerated, matching the parent repo)
 lint:
-	swift-format lint -r Sources Tests
+	swift-format lint -r Sources Tests mlx/Sources
 
 ## format: swift-format in place
 format:
-	swift-format format -i -r Sources Tests
+	swift-format format -i -r Sources Tests mlx/Sources
 
 ## ci-local: the same gates CI runs (build + test + lint)
 ci-local: build test lint
 
-## clean: remove build artifacts
-clean:
-	rm -rf .build
+## build-mlx: build the MnemoEngineMLX package (Xcode required — mlx-swift-lm needs the Metal toolchain). NOT in CI yet; see mlx/README.md.
+build-mlx:
+	cd mlx && $(SWIFT) build
 
-.PHONY: help build test lint format ci-local clean
+## clean: remove build artifacts (engine + mlx)
+clean:
+	rm -rf .build mlx/.build
+
+.PHONY: help build test lint format ci-local build-mlx clean

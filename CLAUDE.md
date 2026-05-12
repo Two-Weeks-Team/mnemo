@@ -23,13 +23,16 @@ Mnemo is an on-device system that **records what you need** (screen, mic, clipbo
 ## Layout
 
 ```
-Package.swift                    — SwiftPM manifest (macOS 14 floor; builds with CommandLineTools alone)
+Package.swift                    — the engine package (macOS 14 floor; builds with CommandLineTools alone; NO third-party SPM deps except swift-testing)
 Sources/MnemoEngine/             — the engine: Models, Support (Clock), Memory, Reason, Recall, Express, MnemoCoordinator
 Tests/MnemoEngineTests/          — swift-testing suite
+mlx/                             — a SEPARATE package: MnemoEngineMLX — depends on mlx-swift-lm + path-depends on the engine; needs Xcode (Metal toolchain). MLXGemmaGenerator: FunctionCallGenerating over Gemma 4. NOT built by `make build` / the main CI — see mlx/README.md. (`make build-mlx`)
 docs/mnemo-implementation-plan.md — the validated plan (§1 invariants, §10 binding revisions)
-Makefile                         — build / test / lint / ci-local (`make help`)
-.github/workflows/ci.yml         — build-and-test · swift-format lint · gitleaks (macos-15)
+Makefile                         — build / test / lint / ci-local / build-mlx (`make help`)
+.github/workflows/ci.yml         — build-and-test · swift-format lint · gitleaks (macos-15); MLX-free on purpose
 ```
+
+**Keep MLX out of the engine package.** Anything that needs `mlx-swift-lm` (the real model runtime, a transformer embedding model) goes in `mlx/` or the app layer. The engine package must keep building with CommandLineTools alone and stay free of third-party SPM dependencies.
 
 ## Common commands
 
@@ -56,4 +59,4 @@ the model enums in `Models/`, `ExpressionModality`, `RecallResult`, `RecallQuery
 
 ## What is NOT here yet (and the honest timeline)
 
-Phase 1 = the engine *core* (pure logic). Phase 2 ◑ = `SQLiteMemoryStore` (real tombstone deletes, outside backup/sync/Spotlight, with the path-attributes CI test) + `SummaryEngine` rollup — **done**; still pending an on-disk ANN vector index and at-rest encryption integration. Phase 3 ◑ = `FunctionCallParser` + `RecallPromptBuilder` + `GemmaReasoningOverFunctionCalls` (a complete `GemmaReasoning` lacking only the generator) + `FunctionCallGenerating` seam + the verified model identity (HF `mlx-community/gemma-4-e4b-it-4bit`, `LLMRegistry.gemma4_e4b_it_4bit`, mlx-swift-lm ≥ 3.31.3) + `NLEmbeddingService` (real on-device embedder via `NaturalLanguage`, no dep) — **done**; what's left = a separate `MnemoEngineMLX` target (depends on mlx-swift-lm, built with Xcode, `#if canImport(MLXLLM)`-guarded) implementing just `FunctionCallGenerating` over the real Gemma 4 weights — then `GemmaReasoningOverFunctionCalls(generator:)` is a full `GemmaReasoning`. **The engine library itself stays dependency-free (no MLX, no third-party SPM packages beyond swift-testing).** Phase 4 = real macOS capture + the privacy UX (~1–2 months). Phase 5 = the macOS app (~1–2 months). Phase 6 = iOS. Phase 7 = hardening + deploy (privacy review, the dependency gate, the network-entitlement CI gate, the path-attributes CI test, thermal/battery perf, the accessibility audit, notarization) — months. **"Actually deployable" ≈ 5–9 months for a small team.** See README's phase table and the plan §6/§10.
+Phase 1 = the engine *core* (pure logic). Phase 2 ◑ = `SQLiteMemoryStore` (real tombstone deletes, outside backup/sync/Spotlight, with the path-attributes CI test) + `SummaryEngine` rollup — **done**; still pending an on-disk ANN vector index and at-rest encryption integration. Phase 3 ◑ = `FunctionCallParser` + `RecallPromptBuilder` + `GemmaReasoningOverFunctionCalls` (a complete `GemmaReasoning` lacking only the generator) + `FunctionCallGenerating` seam + the verified model identity (HF `mlx-community/gemma-4-e4b-it-4bit`, `LLMRegistry.gemma4_e4b_it_4bit`, mlx-swift-lm ≥ 3.31.3) + `NLEmbeddingService` (real on-device embedder via `NaturalLanguage`, no dep) — **done in the engine**. The `MnemoEngineMLX` package (`mlx/`) — `MLXGemmaGenerator: FunctionCallGenerating` over the real Gemma 4 weights, `#if canImport(MLXLLM)`-guarded, mirroring He Was Socrates's `GemmaService.real` — is **written but not yet built/verified** (needs Xcode + ~4 GB weights; reconcile mlx-swift-lm API drift on a Mac, then add a CI job — see `mlx/README.md`). Once it builds, `GemmaReasoningOverFunctionCalls(generator: MLXGemmaGenerator())` is a full reasoning impl. **The engine library itself stays dependency-free (no MLX, no third-party SPM packages beyond swift-testing).** Phase 4 = real macOS capture + the privacy UX (~1–2 months). Phase 5 = the macOS app (~1–2 months). Phase 6 = iOS. Phase 7 = hardening + deploy (privacy review, the dependency gate, the network-entitlement CI gate, the path-attributes CI test, thermal/battery perf, the accessibility audit, notarization) — months. **"Actually deployable" ≈ 5–9 months for a small team.** See README's phase table and the plan §6/§10.
