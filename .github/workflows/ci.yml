@@ -1,0 +1,93 @@
+name: CI
+
+# Triggers: PRs to main and pushes to main.
+# Runner: macos-15 — Phase 1 has no macOS-26-specific APIs (Package.swift floor
+#         is macOS 14). When real capture lands (Phase 4: ScreenCaptureKit etc.)
+#         bump the floor and the runner together, as the parent repo did.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1) swift build + the full swift-testing suite. `make test` runs the whole
+  #    suite, so the test count drifts as work lands — it is not asserted here.
+  # -------------------------------------------------------------------------
+  build-and-test:
+    name: swift build & swift-testing suite
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          swift --version
+
+      - name: Cache SwiftPM (~/.swiftpm + .build)
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.swiftpm
+            .build
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-
+
+      - name: Build (make build)
+        run: make build
+
+      - name: Run swift-testing suite (make test)
+        run: make test
+
+  # -------------------------------------------------------------------------
+  # 2) Lint Swift sources with Apple's swift-format. Errors fail the job;
+  #    warnings are tolerated (matching the parent repo's posture).
+  # -------------------------------------------------------------------------
+  lint-swift:
+    name: swift-format lint
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install swift-format via Homebrew
+        run: |
+          brew install swift-format
+          swift-format --version
+
+      - name: Lint Sources + Tests (errors only)
+        run: swift-format lint -r Sources Tests
+
+  # -------------------------------------------------------------------------
+  # 3) Secret scanning with gitleaks. Fail on any committed secret.
+  # -------------------------------------------------------------------------
+  security-scan:
+    name: gitleaks secret scan
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository (full history for gitleaks)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks via Homebrew
+        run: |
+          brew install gitleaks
+          gitleaks version
+
+      - name: Run gitleaks
+        run: gitleaks detect --no-banner --source . --redact

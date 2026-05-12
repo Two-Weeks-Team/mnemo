@@ -1,0 +1,55 @@
+Mnemo — Dual License
+
+================================================================================
+CODE LICENSE: Apache License, Version 2.0
+================================================================================
+
+All source code in this repository (specifically: files under `Sources/`,
+`Tests/`, and any `*.swift`, `*.py`, `*.sh`, `*.js`, `*.ts` files at the repo
+root) is licensed under the Apache License, Version 2.0 (the "Code License");
+you may not use this code except in compliance with the Code License. You may
+obtain a copy of the Code License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the Code License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the Code License for the specific language governing permissions and
+limitations under the Code License.
+
+This Code License is chosen to remain compatible with the Apache 2.0
+license under which Google's Gemma 4 weights are distributed.
+
+================================================================================
+DOCUMENTATION / SPECIFICATION / MEDIA LICENSE: CC-BY-4.0
+================================================================================
+
+All non-code content in this repository (specifically: files in `docs/`,
+`README.md`, `CLAUDE.md`, and any non-code images / videos / writeups) is
+licensed under the Creative Commons Attribution 4.0 International License (the
+"Content License"). See:
+
+    https://creativecommons.org/licenses/by/4.0/
+
+================================================================================
+ATTRIBUTION
+================================================================================
+
+If you are required to provide attribution under either license,
+please cite this work as:
+
+    Two-Weeks-Team. (2026). Mnemo: an on-device capture-and-express system.
+    https://github.com/Two-Weeks-Team/mnemo
+
+================================================================================
+THIRD-PARTY NOTICES
+================================================================================
+
+This work is designed to use Google's Gemma 4 model weights, distributed
+under the Apache License, Version 2.0. See https://ai.google.dev/gemma/terms.
+
+Phases 3+ will add MLX-Swift (Apple, MIT-style license) and Apple's Speech
+framework, AVFoundation, ScreenCaptureKit, and Core Haptics (Apple Software
+License Agreement, embedded in the OS). Those notices will be updated as the
+dependencies actually land.

@@ -44,12 +44,13 @@ Tests/MnemoEngineTests/
 ## Build & test
 
 ```bash
-cd packages/MnemoEngine
-swift build      # builds with CommandLineTools alone (no Xcode required)
-swift test       # 35 swift-testing tests
+make build       # swift build — builds with CommandLineTools alone (no Xcode required)
+make test        # swift test — 35 swift-testing tests
+make lint        # swift-format lint -r Sources Tests
+make ci-local    # build + test + lint — the same gates CI runs
 ```
 
-(Not yet wired into the repo's `Makefile` / CI — that's a follow-up. The package is standalone.)
+CI (`.github/workflows/ci.yml`, `macos-15`): build-and-test · swift-format lint · gitleaks secret scan. This repo was extracted from [`Two-Weeks-Team/he-was-socrates`](https://github.com/Two-Weeks-Team/he-was-socrates) (`packages/MnemoEngine/`); Mnemo is a distinct product that reuses that POC's on-device substrate. See `CLAUDE.md` for working conventions and `docs/mnemo-implementation-plan.md` for the validated plan (§1 invariants, §10 binding revisions).
 
 ## What's NOT here (and why "deployable" is months away, honestly)
 
