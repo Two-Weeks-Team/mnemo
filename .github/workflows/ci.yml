@@ -69,7 +69,7 @@ jobs:
           swift-format --version
 
       - name: Lint Sources + Tests (errors only)
-        run: swift-format lint -r Sources Tests
+        run: swift-format lint -r Sources Tests mlx/Sources
 
   # -------------------------------------------------------------------------
   # 3) Secret scanning with gitleaks. Fail on any committed secret.
